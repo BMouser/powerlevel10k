@@ -4404,6 +4404,98 @@ _p9k_prompt_kubecontext_init() {
   typeset -g "_p9k__segment_cond_${_p9k__prompt_side}[_p9k__segment_index]"='$commands[kubectl]'
 }
 
+# Created a second kubecontext prompt that can be used in the transient prompt
+prompt_transient_kubecontext() {
+  if ! _p9k_cache_stat_get $0 ${(s.:.)${KUBECONFIG:-$HOME/.kube/config}}; then
+    local name namespace cluster user cloud_name cloud_account cloud_zone cloud_cluster text state
+    () {
+      local cfg && cfg=(${(f)"$(kubectl config view -o=yaml 2>/dev/null)"}) || return
+      local qstr='"*"'
+      local str='([^"'\''|>]*|'$qstr')'
+      local ctx=(${(@M)cfg:#current-context: $~str})
+      (( $#ctx == 1 )) || return
+      name=${ctx[1]#current-context: }
+      local -i pos=${cfg[(i)contexts:]}
+      {
+        (( pos <= $#cfg )) || return
+        shift $pos cfg
+        pos=${cfg[(i)  name: $name]}
+        (( pos <= $#cfg )) || return
+        (( --pos ))
+        for ((; pos > 0; --pos)); do
+          local line=$cfg[pos]
+          if [[ $line == '- context:' ]]; then
+            return 0
+          elif [[ $line == (#b)'    cluster: '($~str) ]]; then
+            cluster=$match[1]
+            [[ $cluster == $~qstr ]] && cluster=$cluster[2,-2]
+          elif [[ $line == (#b)'    namespace: '($~str) ]]; then
+            namespace=$match[1]
+            [[ $namespace == $~qstr ]] && namespace=$namespace[2,-2]
+          elif [[ $line == (#b)'    user: '($~str) ]]; then
+            user=$match[1]
+            [[ $user == $~qstr ]] && user=$user[2,-2]
+          fi
+        done
+      } always {
+        [[ $name == $~qstr ]] && name=$name[2,-2]
+      }
+    }
+    if [[ -n $name ]]; then
+      : ${namespace:=default}
+      # gke_my-account_us-east1-a_cluster-01
+      # gke_my-account_us-east1_cluster-01
+      if [[ $cluster == (#b)gke_(?*)_(asia|australia|europe|northamerica|southamerica|us)-([a-z]##<->)(-[a-z]|)_(?*) ]]; then
+        cloud_name=gke
+        cloud_account=$match[1]
+        cloud_zone=$match[2]-$match[3]$match[4]
+        cloud_cluster=$match[5]
+        if (( ${_POWERLEVEL9K_TRANSIENT_KUBECONTEXT_SHORTEN[(I)gke]} )); then
+          text=$cloud_cluster
+        fi
+      # arn:aws:eks:us-east-1:123456789012:cluster/cluster-01
+      elif [[ $cluster == (#b)arn:aws:eks:([[:alnum:]-]##):([[:digit:]]##):cluster/(?*) ]]; then
+        cloud_name=eks
+        cloud_zone=$match[1]
+        cloud_account=$match[2]
+        cloud_cluster=$match[3]
+        if (( ${_POWERLEVEL9K_TRANSIENT_KUBECONTEXT_SHORTEN[(I)eks]} )); then
+          text=$cloud_cluster
+        fi
+      fi
+      if [[ -z $text ]]; then
+        text=$name
+        if [[ $_POWERLEVEL9K_TRANSIENT_KUBECONTEXT_SHOW_DEFAULT_NAMESPACE == 1 || $namespace != (default|$name) ]]; then
+          text+="/$namespace"
+        fi
+      fi
+      local pat class
+      for pat class in "${_POWERLEVEL9K_TRANSIENT_KUBECONTEXT_CLASSES[@]}"; do
+        if [[ $text == ${~pat} ]]; then
+          [[ -n $class ]] && state=_${${(U)class}//İ/I}
+          break
+        fi
+      done
+    fi
+    _p9k_cache_stat_set "$name" "$namespace" "$cluster" "$user" "$cloud_name" "$cloud_account" "$cloud_zone" "$cloud_cluster" "$text" "$state"
+  fi
+
+  typeset -g P9K_TRANSIENT_KUBECONTEXT_NAME=$_p9k__cache_val[1]
+  typeset -g P9K_TRANSIENT_KUBECONTEXT_NAMESPACE=$_p9k__cache_val[2]
+  typeset -g P9K_TRANSIENT_KUBECONTEXT_CLUSTER=$_p9k__cache_val[3]
+  typeset -g P9K_TRANSIENT_KUBECONTEXT_USER=$_p9k__cache_val[4]
+  typeset -g P9K_TRANSIENT_KUBECONTEXT_CLOUD_NAME=$_p9k__cache_val[5]
+  typeset -g P9K_TRANSIENT_KUBECONTEXT_CLOUD_ACCOUNT=$_p9k__cache_val[6]
+  typeset -g P9K_TRANSIENT_KUBECONTEXT_CLOUD_ZONE=$_p9k__cache_val[7]
+  typeset -g P9K_TRANSIENT_KUBECONTEXT_CLOUD_CLUSTER=$_p9k__cache_val[8]
+  [[ -n $_p9k__cache_val[9] ]] || return
+  _p9k_prompt_segment $0$_p9k__cache_val[10] magenta white KUBERNETES_ICON 0 '' "${_p9k__cache_val[9]//\%/%%}"
+}
+
+_p9k_prompt_transient_kubecontext_init() {
+  typeset -g "_p9k__segment_cond_${_p9k__prompt_side}[_p9k__segment_index]"='$commands[kubectl]'
+}
+
 ################################################################
 # Dropbox status
 prompt_dropbox() {
@@ -7287,6 +7379,8 @@ _p9k_init_params() {
   _p9k_declare -e POWERLEVEL9K_NODEENV_RIGHT_DELIMITER "]"
   _p9k_declare -b POWERLEVEL9K_KUBECONTEXT_SHOW_DEFAULT_NAMESPACE 1
   _p9k_declare -a POWERLEVEL9K_KUBECONTEXT_SHORTEN --
+  _p9k_declare -b POWERLEVEL9K_TRANSIENT_KUBECONTEXT_SHOW_DEFAULT_NAMESPACE 1
+  _p9k_declare -a POWERLEVEL9K_TRANSIENT_KUBECONTEXT_SHORTEN --
   # Defines context classes for the purpose of applying different styling to different contexts.
   #
   # POWERLEVEL9K_KUBECONTEXT_CLASSES must be an array with even number of elements. The first
@@ -7311,6 +7405,7 @@ _p9k_init_params() {
   #   POWERLEVEL9K_KUBECONTEXT_TESTING_BACKGROUND=green
   #   POWERLEVEL9K_KUBECONTEXT_OTHER_BACKGROUND=yellow
   _p9k_declare -a POWERLEVEL9K_KUBECONTEXT_CLASSES --
+  _p9k_declare -a POWERLEVEL9K_TRANSIENT_KUBECONTEXT_CLASSES --
   _p9k_declare -a POWERLEVEL9K_AWS_CLASSES --
   _p9k_declare -a POWERLEVEL9K_TERRAFORM_CLASSES --
   _p9k_declare -b POWERLEVEL9K_TERRAFORM_SHOW_DEFAULT 0
